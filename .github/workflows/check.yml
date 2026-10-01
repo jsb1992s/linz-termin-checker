@@ -1,0 +1,85 @@
+name: Linz Termin Checker
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may delay runs a few minutes)
+  workflow_dispatch:          # lets you start a check by hand ("Run workflow" button)
+
+env:
+  CUTOFF: "2026-11-05"        # notify for dates strictly BEFORE this day (YYYY-MM-DD)
+  SERVICE_ID: "305932"        # Terminreservierung (Drittstaatsangehörige) Zweckänderungsantrag
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Remembers which dates we already notified about, so you don't get the
+      # same push every 10 minutes while a date stays free.
+      - uses: actions/cache/restore@v4
+        with:
+          path: seen.txt
+          key: seen-${{ github.run_id }}
+          restore-keys: seen-
+
+      - name: Check for free dates
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        shell: python
+        run: |
+          import json, os, urllib.request
+          from datetime import date
+
+          cutoff = os.environ["CUTOFF"]
+          topic = os.environ.get("NTFY_TOPIC", "")
+          booking_url = "https://www.etermin.net/magistrat_linz?servicegroupid=93176"
+
+          # Same request the site makes after "weiter zur Terminauswahl";
+          # rangesearch=1 returns the days that are clickable in the calendar.
+          params = "&".join([
+              f"date={date.today().isoformat()}",
+              f"serviceid={os.environ['SERVICE_ID']}",
+              "rangesearch=1", "caching=false", "capacity=1", "duration=30",
+              "cluster=false", "slottype=0", "fillcalendarstrategy=0",
+              "showavcap=false", "appfuture=-1", "appdeadline=-1", "msdcm=-1",
+              "oneoff=null", "appdeadlinewm=0", "calendarid=",
+          ])
+          req = urllib.request.Request(
+              f"https://www.etermin.net/api/timeslots?{params}",
+              headers={"webid": "magistrat_linz", "Accept": "application/json",
+                       "User-Agent": "Mozilla/5.0"},
+          )
+          slots = json.load(urllib.request.urlopen(req, timeout=30))
+          days = sorted({s["start"][:10] for s in slots if s.get("available", 1) != 0})
+          early = [d for d in days if d < cutoff]
+
+          fmt = lambda d: f"{d[8:10]}.{d[5:7]}.{d[0:4]}"
+          print("Free days:", ", ".join(map(fmt, days)) or "none")
+
+          seen = set(open("seen.txt").read().split()) if os.path.exists("seen.txt") else set()
+          new = [d for d in early if d not in seen]
+
+          if new:
+              body = f"Free date(s) before {fmt(cutoff)}: {', '.join(map(fmt, early))}\nTap to book now."
+              print("Notify:", body)
+              if topic:
+                  urllib.request.urlopen(urllib.request.Request(
+                      f"https://ntfy.sh/{topic}",
+                      data=body.encode(),
+                      headers={"Title": "Linz appointment available!",
+                               "Priority": "urgent", "Tags": "date",
+                               "Click": booking_url},
+                  ), timeout=30)
+              else:
+                  print("NTFY_TOPIC secret is not set - no push sent")
+          else:
+              print(f"Nothing new before {fmt(cutoff)}.")
+
+          with open("seen.txt", "w") as f:
+              f.write("\n".join(early))
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: seen.txt
+          key: seen-${{ github.run_id }}
