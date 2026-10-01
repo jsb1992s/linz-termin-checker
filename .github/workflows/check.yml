@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # lets you start a check by hand ("Run workflow" button)
 
 env:
-  CUTOFF: "2026-11-21"        # notify for dates strictly BEFORE this day (YYYY-MM-DD)
+  CUTOFF: "2026-11-31"        # notify for dates strictly BEFORE this day (YYYY-MM-DD)
   SERVICE_ID: "305932"        # Terminreservierung (Drittstaatsangehörige) Zweckänderungsantrag
 
 jobs:
